@@ -206,7 +206,7 @@ class LiDAREncoder(nn.Module):
 
         voxel_features = torch.cat(feats_list, dim=0)
         voxel_coords = torch.cat(coords_list, dim=0)
-        spatial_shape = [int(s) for s in reversed(vg.grid_size)]
+        spatial_shape = [int(s) for s in vg.grid_size]  # already matches coords axis order -- do not reverse
         return voxel_features, voxel_coords, spatial_shape
 
     def forward(self, points: torch.Tensor, pc_range=None, voxel_size=None):
