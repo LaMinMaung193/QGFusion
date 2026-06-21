@@ -6,7 +6,7 @@ model:
   camera_pretrained: imagenet   # imagenet | nuimages (nuimages ckpt not wired up yet, see camera_encoder.py)
 
   lidar_channels: 256
-  lidar_backend: dense          # dense | spconv (spconv backend not wired up yet, see lidar_encoder.py)
+  lidar_backend: dense          # dense | spconv (both implemented -- spconv requires `pip install spconv-cuXXX` + GPU)
 
   radar_channels: 128
 
@@ -21,9 +21,9 @@ model:
   det_num_classes: 10           # nuScenes detection classes
 
 dataset:
-  dataroot: /path/to/nuscenes
-  version: v1.0-trainval
-  occ_gt_root: null             # set this if using Occ3D-nuScenes or similar benchmark
+  dataroot: /media/user/Transcend/nuScenes/v1.0-mini
+  version: v1.0-mini
+  occ_gt_root: null   # occ3d gts folder likely only covers trainval scenes -- leave null for mini testing
   num_cameras: 6
   img_size: [256, 704]
 
