@@ -5,5 +5,5 @@ pyyaml
 nuscenes-devkit
 
 # Optional, only needed for the real (non-"dense") LiDAR backend:
-# spconv-cu118          # match the package suffix to your CUDA version
+# spconv-cu120        # match the package suffix to your CUDA version
 # mmdetection3d         # if importing the CenterPoint backbone code/weights from here
