@@ -1,0 +1,9 @@
+torch>=2.1
+torchvision>=0.16
+numpy
+pyyaml
+nuscenes-devkit
+
+# Optional, only needed for the real (non-"dense") LiDAR backend:
+# spconv-cu118          # match the package suffix to your CUDA version
+# mmdetection3d         # if importing the CenterPoint backbone code/weights from here
