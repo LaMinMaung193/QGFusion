@@ -1,14 +1,19 @@
 """
-Training loop skeleton. The model forward/backward wiring is complete; what's left as TODO
-is everything dataset-specific (real data loading -- see datasets/nuscenes_dataset.py TODOs)
-and the detection Hungarian matcher (see utils/losses.py TODO).
+QG-Fusion training loop.
 
 Usage:
     python tools/train.py --config configs/default.yaml
+
+    # disable wandb for a quick test run:
+    python tools/train.py --config configs/default.yaml --no-wandb
+
+    # resume from checkpoint:
+    python tools/train.py --config configs/default.yaml --resume checkpoints/epoch_005_step_1938.pt
 """
 import argparse
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -18,63 +23,215 @@ from torch.utils.data import DataLoader
 
 from qgfusion.models.qg_fusion_model import QGFusionModel
 from qgfusion.datasets.nuscenes_dataset import NuScenesMultiModalDataset, collate_fn
-from qgfusion.utils.losses import occupancy_loss, completion_loss, detection_loss
+from qgfusion.utils.losses import (
+    occupancy_loss, completion_loss, detection_loss,
+    gt_boxes_to_targets, make_completion_gt,
+)
+from qgfusion.utils.matcher import HungarianMatcher
+
+LOSS_WEIGHTS = {"occ": 1.0, "det_cls": 0.5, "det_box": 0.25, "completion": 0.25}
+
+
+class _NoopLogger:
+    def log(self, *a, **kw): pass
+    def finish(self): pass
+
+def init_logger(cfg, enabled):
+    if not enabled:
+        print("[logger] wandb disabled -- using console only")
+        return _NoopLogger()
+    try:
+        import wandb
+        wc = cfg.get("wandb", {})
+        run = wandb.init(
+            project=wc.get("project", "qgfusion"),
+            name=wc.get("name", None),
+            config=cfg,
+            resume="allow",
+        )
+        print(f"[logger] wandb run: {run.name}  ({run.url})")
+        return wandb
+    except ImportError:
+        print("[logger] wandb not installed -- falling back to console.")
+        return _NoopLogger()
+
+
+def save_checkpoint(model, optimizer, epoch, step, loss, cfg, ckpt_dir):
+    os.makedirs(ckpt_dir, exist_ok=True)
+    path = os.path.join(ckpt_dir, f"epoch_{epoch:03d}_step_{step}.pt")
+    torch.save({
+        "epoch": epoch, "step": step,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "loss": loss, "cfg": cfg,
+    }, path)
+    print(f"  [ckpt] saved → {path}")
+    return path
+
+
+def load_checkpoint(path, model, optimizer=None):
+    ckpt = torch.load(path, map_location="cpu")
+    model.load_state_dict(ckpt["model_state_dict"])
+    if optimizer is not None and "optimizer_state_dict" in ckpt:
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+    print(f"  [ckpt] resumed from {path}  (epoch {ckpt['epoch']}, step {ckpt['step']})")
+    return ckpt["epoch"], ckpt["step"]
+
+
+def compute_losses(out, batch, matcher, device):
+    losses = {}
+    if batch["gt_occupancy"] is not None:
+        losses["occ"] = occupancy_loss(out["occupancy_logits"], batch["gt_occupancy"])
+        comp_gt = make_completion_gt(batch["gt_occupancy"])
+        losses["completion"] = completion_loss(out["completion_logits"], comp_gt)
+    targets = gt_boxes_to_targets(batch["gt_boxes"], batch["num_boxes"])
+    det = detection_loss(out["detection"], targets, matcher)
+    losses["det_cls"] = det["cls_loss"]
+    losses["det_box"] = det["box_loss"]
+    total = sum(LOSS_WEIGHTS.get(k, 1.0) * v for k, v in losses.items())
+    return losses, total
+
+
+def run_val(model, val_loader, matcher, device, epoch, logger):
+    model.eval()
+    sums = {}
+    count = 0
+    with torch.no_grad():
+        for batch in val_loader:
+            batch = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()}
+            out = model(batch)
+            losses, total = compute_losses(out, batch, matcher, device)
+            for k, v in losses.items():
+                sums[k] = sums.get(k, 0.0) + v.item()
+            sums["total"] = sums.get("total", 0.0) + total.item()
+            count += 1
+    means = {k: v / max(count, 1) for k, v in sums.items()}
+    logger.log({f"val/{k}": v for k, v in means.items()}, step=epoch)
+    loss_str = "  ".join(f"{k}={v:.4f}" for k, v in means.items())
+    print(f"  [val] epoch {epoch:03d}  {loss_str}")
+    return means
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/default.yaml")
+    parser.add_argument("--dataroot", default=None)
+    parser.add_argument("--version", default=None)
+    parser.add_argument("--split", default=None)
+    parser.add_argument("--occ-gt-root", default=None, dest="occ_gt_root")
+    parser.add_argument("--resume", default=None)
+    parser.add_argument("--ckpt-dir", default="checkpoints")
+    parser.add_argument("--log-every", type=int, default=10)
+    parser.add_argument("--ckpt-every", type=int, default=1)
+    parser.add_argument("--no-wandb", action="store_true")
     args = parser.parse_args()
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = QGFusionModel(cfg).to(device)
+    if args.dataroot:    cfg["dataset"]["dataroot"]    = args.dataroot
+    if args.version:     cfg["dataset"]["version"]     = args.version
+    if args.split:       cfg["train"]["split"]         = args.split
+    if args.occ_gt_root: cfg["dataset"]["occ_gt_root"] = args.occ_gt_root
 
-    # NOTE: this will raise NotImplementedError until nuscenes_dataset.py's _load_* methods
-    # are filled in -- run tools/test_forward.py first to validate the model itself.
+    split  = cfg["train"].get("split", "train")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"device: {device}")
+
+    wandb_enabled = not args.no_wandb and cfg.get("wandb", {}).get("enabled", True)
+    logger = init_logger(cfg, wandb_enabled)
+
+    model     = QGFusionModel(cfg).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(),
+                                  lr=cfg["train"]["lr"],
+                                  weight_decay=cfg["train"]["weight_decay"])
+    matcher   = HungarianMatcher(cost_class=1.0, cost_bbox=2.5)
+
+    start_epoch, global_step = 0, 0
+    if args.resume:
+        start_epoch, global_step = load_checkpoint(args.resume, model, optimizer)
+        start_epoch += 1
+
     train_set = NuScenesMultiModalDataset(
         dataroot=cfg["dataset"]["dataroot"],
         version=cfg["dataset"]["version"],
-        split="train",
+        split=split,
         occ_gt_root=cfg["dataset"]["occ_gt_root"],
         num_cameras=cfg["dataset"]["num_cameras"],
         img_size=tuple(cfg["dataset"]["img_size"]),
     )
     train_loader = DataLoader(
-        train_set,
-        batch_size=cfg["train"]["batch_size"],
-        shuffle=True,
-        num_workers=cfg["train"]["num_workers"],
-        collate_fn=collate_fn,
+        train_set, batch_size=cfg["train"]["batch_size"],
+        shuffle=True, num_workers=cfg["train"]["num_workers"],
+        collate_fn=collate_fn, pin_memory=(device == "cuda"),
     )
+    print(f"Train: {len(train_set)} samples ({split}), "
+          f"batch={cfg['train']['batch_size']}, {len(train_loader)} steps/epoch")
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=cfg["train"]["lr"], weight_decay=cfg["train"]["weight_decay"]
-    )
+    val_cfg    = cfg.get("val", {})
+    val_split  = val_cfg.get("split", split.replace("train", "val"))
+    val_every  = val_cfg.get("val_every", 1)
+    val_loader = None
+    try:
+        val_set = NuScenesMultiModalDataset(
+            dataroot=cfg["dataset"]["dataroot"],
+            version=cfg["dataset"]["version"],
+            split=val_split,
+            occ_gt_root=cfg["dataset"]["occ_gt_root"],
+            num_cameras=cfg["dataset"]["num_cameras"],
+            img_size=tuple(cfg["dataset"]["img_size"]),
+        )
+        val_loader = DataLoader(
+            val_set, batch_size=cfg["train"]["batch_size"],
+            shuffle=False, num_workers=cfg["train"]["num_workers"],
+            collate_fn=collate_fn, pin_memory=(device == "cuda"),
+        )
+        print(f"Val:   {len(val_set)} samples ({val_split}), every {val_every} epoch(s)")
+    except Exception as e:
+        print(f"[val] Could not build val loader ({e}) -- skipping")
 
-    for epoch in range(cfg["train"]["epochs"]):
+    for epoch in range(start_epoch, cfg["train"]["epochs"]):
         model.train()
-        for batch in train_loader:
+        epoch_loss = 0.0
+        t0 = time.time()
+
+        for step, batch in enumerate(train_loader):
             batch = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()}
-
             out = model(batch)
-
-            # TODO: replace with real GT once dataset GT loading is implemented
-            loss_occ = occupancy_loss(out["occupancy_logits"], batch["gt_occupancy"])
-            loss_completion = completion_loss(out["completion_logits"], batch["gt_completion"])
-            loss_det = detection_loss(out["detection"], batch["gt_boxes"])  # needs matcher, see losses.py
-
-            loss = loss_occ + loss_completion + sum(loss_det.values())
+            losses, total_loss = compute_losses(out, batch, matcher, device)
 
             optimizer.zero_grad()
-            loss.backward()
+            total_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["train"]["grad_clip"])
             optimizer.step()
 
-        print(f"epoch {epoch}: loss={loss.item():.4f}")
-        # TODO: checkpointing, val loop with mIoU/mAP/NDS metrics, logging (wandb/tensorboard)
+            epoch_loss += total_loss.item()
+            global_step += 1
+
+            if step % args.log_every == 0:
+                loss_str = "  ".join(f"{k}={v.item():.4f}" for k, v in losses.items())
+                print(f"  e{epoch:03d} s{step:04d}/{len(train_loader)}  "
+                      f"total={total_loss.item():.4f}  [{loss_str}]")
+                logger.log(
+                    {**{"train/" + k: v.item() for k, v in losses.items()},
+                    "train/total": total_loss.item(), "train/step": global_step},
+                    step=global_step,
+                )
+
+        elapsed = time.time() - t0
+        mean_loss = epoch_loss / len(train_loader)
+        print(f"epoch {epoch:03d} | mean={mean_loss:.4f} | "
+              f"{elapsed:.0f}s ({elapsed/len(train_loader)*1000:.0f}ms/step)")
+        logger.log({"train/epoch_mean_loss": mean_loss}, step=epoch)
+
+        if val_loader is not None and (epoch + 1) % val_every == 0:
+            run_val(model, val_loader, matcher, device, epoch, logger)
+
+        if (epoch + 1) % args.ckpt_every == 0:
+            save_checkpoint(model, optimizer, epoch, global_step,
+                            mean_loss, cfg, args.ckpt_dir)
+
+    logger.finish()
 
 
 if __name__ == "__main__":

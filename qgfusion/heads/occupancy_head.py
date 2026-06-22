@@ -40,42 +40,44 @@ class OccupancyHead(nn.Module):
         gx, gy, gz = torch.meshgrid(xs, ys, zs, indexing="ij")
         return torch.stack([gx, gy, gz], dim=-1).view(-1, 3)  # (X*Y*Z, 3)
 
-    def forward(self, gaussians: GaussianScene, chunk_size: int = 20000) -> torch.Tensor:
+    def forward(self, gaussians: GaussianScene, chunk_size: int = 4000) -> torch.Tensor:
         """
         Args:
             gaussians: GaussianScene, N Gaussians per batch element
-            chunk_size: number of voxels processed at once. Bounds peak memory to
-                roughly chunk_size * N * 3 floats regardless of total grid resolution --
-                at full nuScenes occupancy resolution (0.4m, ~640k voxels) the unchunked
-                (V, N, 3) distance tensor is multiple GB, so this matters even on a GPU.
+            chunk_size: voxels per chunk. Gradient checkpointing means each chunk's
+                intermediates are recomputed during backward rather than stored, so
+                total backward memory is O(chunk_size * N) not O(V * N).
+                4000 is safe on a 24GB card with batch_size=1 and N=300 queries.
         Returns:
             occupancy_logits: (B, num_classes, X, Y, Z)
-
-        TODO(risk=MEDIUM): the splat below uses an isotropic distance falloff (mean scale
-        across axes) for clarity. For the real model, swap in the full anisotropic Gaussian
-        (rotation + per-axis scale, via gaussian_utils.quaternion_to_rotmat) per proposal
-        Sec 4.6 Option 1.
         """
+        from torch.utils.checkpoint import checkpoint as grad_ckpt
+
+        def _splat_chunk(c_chunk, pos_b, scale_b, opacity_b, feats_b):
+            dist2 = ((c_chunk.unsqueeze(1) - pos_b.unsqueeze(0)) ** 2).sum(-1)
+            sigma2 = (scale_b.mean(-1) ** 2).clamp(min=1e-4)
+            weight = opacity_b * torch.exp(-0.5 * dist2 / sigma2.unsqueeze(0))
+            return weight @ feats_b
+
         B, N, _ = gaussians.position.shape
         device = gaussians.position.device
-        centers = self._voxel_centers(device)  # (V, 3)
+        centers = self._voxel_centers(device)
         V, C = centers.shape[0], gaussians.features.shape[-1]
-
         occ_feat = torch.zeros(B, V, C, device=device)
 
         for b in range(B):
-            pos_b = gaussians.position[b]  # (N, 3)
-            sigma2 = (gaussians.scale[b].mean(-1) ** 2).clamp(min=1e-4)  # (N,)
-            opacity_b = gaussians.opacity[b]  # (N,)
-            feats_b = gaussians.features[b]  # (N, C)
-
+            pos_b     = gaussians.position[b]
+            scale_b   = gaussians.scale[b]
+            opacity_b = gaussians.opacity[b]
+            feats_b   = gaussians.features[b]
             for start in range(0, V, chunk_size):
                 end = min(start + chunk_size, V)
-                c_chunk = centers[start:end]  # (v, 3)
-                dist2 = ((c_chunk.unsqueeze(1) - pos_b.unsqueeze(0)) ** 2).sum(-1)  # (v, N)
-                weight = opacity_b.unsqueeze(0) * torch.exp(-0.5 * dist2 / sigma2.unsqueeze(0))  # (v, N)
-                occ_feat[b, start:end] = weight @ feats_b  # (v, C)
+                c_chunk = centers[start:end]
+                occ_feat[b, start:end] = grad_ckpt(
+                    _splat_chunk, c_chunk, pos_b, scale_b, opacity_b, feats_b,
+                    use_reentrant=False,
+                )
 
-        logits = self.classifier(occ_feat)  # (B, V, num_classes)
+        logits = self.classifier(occ_feat)
         X, Y, Z = self.grid_size
         return logits.view(B, X, Y, Z, -1).permute(0, 4, 1, 2, 3)

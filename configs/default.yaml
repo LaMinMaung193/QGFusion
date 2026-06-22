@@ -23,14 +23,27 @@ model:
 dataset:
   dataroot: /media/user/Transcend/nuScenes/v1.0-mini
   version: v1.0-mini
-  occ_gt_root: null   # occ3d gts folder likely only covers trainval scenes -- leave null for mini testing
+  occ_gt_root: /media/user/Transcend/data/occ3d/gts
   num_cameras: 6
   img_size: [256, 704]
 
+
 train:
-  batch_size: 2
+  split: mini_train
+  batch_size: 1
   num_workers: 4
   lr: 2.0e-4
   weight_decay: 0.01
   epochs: 24
   grad_clip: 35.0
+
+
+val:
+  split: mini_val
+  val_every: 1
+
+wandb:
+  project: qgfusion
+  name: null
+  enabled: true
+
