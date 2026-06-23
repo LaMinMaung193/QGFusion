@@ -29,7 +29,7 @@ from qgfusion.utils.losses import (
 )
 from qgfusion.utils.matcher import HungarianMatcher
 
-LOSS_WEIGHTS = {"occ": 1.0, "det_cls": 0.5, "det_box": 0.25, "completion": 0.25}
+LOSS_WEIGHTS = {"occ": 1.0, "det_cls": 0.5, "det_box": 0.05, "completion": 0.25}
 
 
 class _NoopLogger:
@@ -84,11 +84,29 @@ def compute_losses(out, batch, matcher, device):
         losses["occ"] = occupancy_loss(out["occupancy_logits"], batch["gt_occupancy"])
         comp_gt = make_completion_gt(batch["gt_occupancy"])
         losses["completion"] = completion_loss(out["completion_logits"], comp_gt)
-    targets = gt_boxes_to_targets(batch["gt_boxes"], batch["num_boxes"])
+    pc_range = [-40.0, -40.0, -1.0, 40.0, 40.0, 5.4]
+    filtered_boxes = batch["gt_boxes"].clone()
+    filtered_num   = batch["num_boxes"].clone()
+    for b in range(filtered_boxes.shape[0]):
+        n = int(batch["num_boxes"][b].item())
+        boxes_b = filtered_boxes[b, :n]
+        mask = (
+            (boxes_b[:, 0] >= pc_range[0]) & (boxes_b[:, 0] <= pc_range[3]) &
+            (boxes_b[:, 1] >= pc_range[1]) & (boxes_b[:, 1] <= pc_range[4]) &
+            (boxes_b[:, 2] >= pc_range[2]) & (boxes_b[:, 2] <= pc_range[5])
+        )
+        kept = boxes_b[mask]
+        filtered_boxes[b, :kept.shape[0]] = kept
+        filtered_boxes[b, kept.shape[0]:n] = 0
+        filtered_num[b] = kept.shape[0]
+    targets = gt_boxes_to_targets(filtered_boxes, filtered_num)
     det = detection_loss(out["detection"], targets, matcher)
     losses["det_cls"] = det["cls_loss"]
     losses["det_box"] = det["box_loss"]
     total = sum(LOSS_WEIGHTS.get(k, 1.0) * v for k, v in losses.items())
+    # Guard: if no loss terms fired (e.g. all boxes filtered), return a differentiable zero
+    if not isinstance(total, torch.Tensor) or total.grad_fn is None:
+        total = sum(p.sum() * 0 for p in out["occupancy_logits"].flatten()[:1])
     return losses, total
 
 
