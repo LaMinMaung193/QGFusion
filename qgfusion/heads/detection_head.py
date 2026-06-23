@@ -36,7 +36,7 @@ class DetectionHead(nn.Module):
         feats = gaussians.features
         cls_logits = self.cls_head(feats)
         center = gaussians.position + self.center_residual(feats)
-        size = gaussians.scale * torch.exp(self.size_residual(feats).clamp(max=5))
+        size = torch.exp(self.size_residual(feats).clamp(min=-1, max=2.7))
         yaw_sc = nn.functional.normalize(self.yaw_head(feats), dim=-1)
         velocity = self.velocity_head(feats)
 

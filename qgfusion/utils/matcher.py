@@ -53,7 +53,15 @@ class HungarianMatcher(nn.Module):
                 continue
 
             cost_class = -cls_probs[b][:, tgt_labels]  # (N, M)
-            cost_bbox = torch.cdist(preds["boxes"][b], tgt_boxes, p=1)  # (N, M)
+            # Normalize center (cols 0:3) and size (cols 3:6) separately so
+            # large metric values don't dominate the classification cost.
+            pred_ctr = preds["boxes"][b][:, :3] / 40.0   # pc_range half-width
+            tgt_ctr  = tgt_boxes[:, :3] / 40.0
+            pred_sz  = preds["boxes"][b][:, 3:6] / 10.0  # max realistic object size
+            tgt_sz   = tgt_boxes[:, 3:6] / 10.0
+            pred_norm = torch.cat([pred_ctr, pred_sz, preds["boxes"][b][:, 6:]], dim=-1)
+            tgt_norm  = torch.cat([tgt_ctr,  tgt_sz,  tgt_boxes[:, 6:]], dim=-1)
+            cost_bbox = torch.cdist(pred_norm, tgt_norm, p=1)  # (N, M)
             cost = (self.cost_class * cost_class + self.cost_bbox * cost_bbox).cpu()
 
             pred_idx, tgt_idx = linear_sum_assignment(cost)
