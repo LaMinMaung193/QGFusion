@@ -92,7 +92,7 @@ def compute_losses(out, batch, matcher, device):
     return losses, total
 
 
-def run_val(model, val_loader, matcher, device, epoch, logger):
+def run_val(model, val_loader, matcher, device, epoch, global_step, logger):
     model.eval()
     sums = {}
     count = 0
@@ -106,7 +106,7 @@ def run_val(model, val_loader, matcher, device, epoch, logger):
             sums["total"] = sums.get("total", 0.0) + total.item()
             count += 1
     means = {k: v / max(count, 1) for k, v in sums.items()}
-    logger.log({f"val/{k}": v for k, v in means.items()}, step=epoch)
+    logger.log({f"val/{k}": v for k, v in means.items()}, step=global_step)
     loss_str = "  ".join(f"{k}={v:.4f}" for k, v in means.items())
     print(f"  [val] epoch {epoch:03d}  {loss_str}")
     return means
@@ -222,10 +222,10 @@ def main():
         mean_loss = epoch_loss / len(train_loader)
         print(f"epoch {epoch:03d} | mean={mean_loss:.4f} | "
               f"{elapsed:.0f}s ({elapsed/len(train_loader)*1000:.0f}ms/step)")
-        logger.log({"train/epoch_mean_loss": mean_loss}, step=epoch)
+        logger.log({"train/epoch_mean_loss": mean_loss}, step=global_step)
 
         if val_loader is not None and (epoch + 1) % val_every == 0:
-            run_val(model, val_loader, matcher, device, epoch, logger)
+            run_val(model, val_loader, matcher, device, epoch, global_step, logger)
 
         if (epoch + 1) % args.ckpt_every == 0:
             save_checkpoint(model, optimizer, epoch, global_step,
