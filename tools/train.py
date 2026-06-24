@@ -78,6 +78,33 @@ def load_checkpoint(path, model, optimizer=None):
     return ckpt["epoch"], ckpt["step"]
 
 
+
+def gaussian_health_check(out, step, logger):
+    g = out.get("gaussians", None)
+    if g is None:
+        return
+    stats = {}
+    if hasattr(g, "scale") and g.scale is not None:
+        s = g.scale.detach()
+        stats["scale_min"] = s.min().item()
+        stats["scale_mean"] = s.mean().item()
+        stats["scale_max"] = s.max().item()
+    if hasattr(g, "opacity") and g.opacity is not None:
+        o = g.opacity.detach()
+        stats["opacity_mean"] = o.mean().item()
+    if hasattr(g, "position") and g.position is not None:
+        stats["pos_abs_max"] = g.position.detach().abs().max().item()
+    if stats:
+        print(f"  [GAUSS] s{step:05d}  "
+              f"scale=({stats.get('scale_min',0):.3e}, {stats.get('scale_mean',0):.3e}, {stats.get('scale_max',0):.3e})  "
+              f"opacity={stats.get('opacity_mean',0):.3f}  "
+              f"pos_abs_max={stats.get('pos_abs_max',0):.1f}")
+        if stats.get("scale_min", 1.0) < 1e-3:
+            print(f"  !! [COLLAPSE] scale_min={stats['scale_min']:.2e}")
+        if stats.get("opacity_mean", 1.0) < 0.05:
+            print(f"  !! [COLLAPSE] opacity_mean={stats['opacity_mean']:.4f}")
+        logger.log({"train/gauss_" + k: v for k, v in stats.items()}, step=step)
+
 def compute_losses(out, batch, matcher, device):
     losses = {}
     if batch["gt_occupancy"] is not None:
@@ -104,6 +131,14 @@ def compute_losses(out, batch, matcher, device):
     losses["det_cls"] = det["cls_loss"]
     losses["det_box"] = det["box_loss"]
     total = sum(LOSS_WEIGHTS.get(k, 1.0) * v for k, v in losses.items())
+    # Gaussian regularisers: prevent scale explosion and opacity collapse
+    if "gaussians" in out:
+        mean_opacity = out["gaussians"].opacity.mean()
+        opacity_reg = torch.relu(0.3 - mean_opacity) * 2.0
+        total = total + opacity_reg
+        mean_scale = out["gaussians"].scale.mean()
+        scale_reg = torch.relu(mean_scale - 5.0) * 0.1
+        total = total + scale_reg
     # Guard: if no loss terms fired (e.g. all boxes filtered), return a differentiable zero
     if not isinstance(total, torch.Tensor) or total.grad_fn is None:
         total = sum(p.sum() * 0 for p in out["occupancy_logits"].flatten()[:1])
@@ -124,6 +159,10 @@ def run_val(model, val_loader, matcher, device, epoch, global_step, logger):
             sums["total"] = sums.get("total", 0.0) + total.item()
             count += 1
     means = {k: v / max(count, 1) for k, v in sums.items()}
+    if "total" not in means and means:
+        means["total"] = sum(LOSS_WEIGHTS.get(k, 1.0) * v for k, v in means.items() if k != "total")
+    if "total" not in means and means:
+        means["total"] = sum(LOSS_WEIGHTS.get(k, 1.0) * v for k, v in means.items() if k != "total")
     logger.log({f"val/{k}": v for k, v in means.items()}, step=global_step)
     loss_str = "  ".join(f"{k}={v:.4f}" for k, v in means.items())
     print(f"  [val] epoch {epoch:03d}  {loss_str}")
@@ -225,6 +264,9 @@ def main():
 
             epoch_loss += total_loss.item()
             global_step += 1
+
+            if step % 50 == 0:
+                gaussian_health_check(out, global_step, logger)
 
             if step % args.log_every == 0:
                 loss_str = "  ".join(f"{k}={v.item():.4f}" for k, v in losses.items())
