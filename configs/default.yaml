@@ -6,7 +6,7 @@ model:
   camera_pretrained: imagenet   # imagenet | nuimages (nuimages ckpt not wired up yet, see camera_encoder.py)
 
   lidar_channels: 256
-  lidar_backend: dense          # dense | spconv (both implemented -- spconv requires `pip install spconv-cuXXX` + GPU)
+  lidar_backend: spconv          # dense | spconv (both implemented -- spconv requires `pip install spconv-cuXXX` + GPU)
 
   radar_channels: 128
 
