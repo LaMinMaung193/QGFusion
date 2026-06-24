@@ -181,6 +181,7 @@ def main():
     parser.add_argument("--log-every", type=int, default=10)
     parser.add_argument("--ckpt-every", type=int, default=1)
     parser.add_argument("--no-wandb", action="store_true")
+    parser.add_argument("--blacklist", default=None, help="Path to bad_sample_tokens.txt")
     args = parser.parse_args()
 
     with open(args.config) as f:
@@ -216,6 +217,7 @@ def main():
         occ_gt_root=cfg["dataset"]["occ_gt_root"],
         num_cameras=cfg["dataset"]["num_cameras"],
         img_size=tuple(cfg["dataset"]["img_size"]),
+        blacklist=args.blacklist,
     )
     train_loader = DataLoader(
         train_set, batch_size=cfg["train"]["batch_size"],
