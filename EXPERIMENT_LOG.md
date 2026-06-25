@@ -347,3 +347,47 @@
 - IROS 2027 / ICRA 2027 (primary)
 - ECCV 2026 workshop (faster)
 - RA-L (journal backup)
+---
+
+## 14. Phase 5 — Evaluation Results (Mini Checkpoint, Weighted Loss)
+
+**Date:** 2026-06-25
+**Checkpoint:** checkpoints/epoch_023_step_7752.pt (weighted loss, 24 epochs mini)
+**Split:** mini_val (41 samples with Occ3D GT out of 81 total)
+
+### Occupancy mIoU — mini_val
+
+| Class | IoU | GT voxels | Notes |
+|-------|-----|-----------|-------|
+| barrier | 0.00% | 1,646 | |
+| bicycle | N/A | 0 | Not present in eval set |
+| bus | 0.00% | 281 | |
+| car | 0.00% | 40,826 | |
+| construction_veh | 0.00% | 160,941 | |
+| motorcycle | N/A | 0 | |
+| pedestrian | 0.00% | 8,537 | |
+| traffic_cone | 0.00% | 9,334 | |
+| trailer | N/A | 0 | |
+| truck | N/A | 0 | |
+| driveable_surface | 0.00% | 29,255 | |
+| other_flat | 0.00% | 303,834 | 762 pred voxels — barely activating |
+| sidewalk | N/A | 0 | |
+| terrain | 0.00% | 75,970 | |
+| manmade | 0.00% | 113,373 | |
+| vegetation | 0.00% | 308,368 | |
+| free | 0.00% | 767,927 | |
+| free_17 | 74.57% | 5,336,368 | Model predicts mostly free |
+| **mIoU** | **5.74%** | | Inflated by free class only |
+
+### Scene Completion — mini_val
+| Metric | Value |
+|--------|-------|
+| Free IoU | 91.92% |
+| Occupied IoU | 0.00% |
+| Mean IoU | 45.96% |
+
+### Diagnosis
+- Model predicts class 17 (free) for almost all voxels
+- 6x class weight insufficient at mini scale (~284 GT samples only)
+- Trainval expected to show non-zero occupied IoU — that is the paper result
+- Mini = proof of concept only

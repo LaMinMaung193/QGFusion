@@ -344,7 +344,7 @@ def main():
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(loader):
-            if args.max_samples and n_processed >= args.max_samples:
+            if args.max_samples and n_with_gt >= args.max_samples:
                 break
 
             sample_token = batch["sample_tokens"][0]
