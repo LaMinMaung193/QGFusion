@@ -239,6 +239,7 @@ def main():
             occ_gt_root=cfg["dataset"]["occ_gt_root"],
             num_cameras=cfg["dataset"]["num_cameras"],
             img_size=tuple(cfg["dataset"]["img_size"]),
+            blacklist=args.blacklist,
         )
         val_loader = DataLoader(
             val_set, batch_size=cfg["train"]["batch_size"],
