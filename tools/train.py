@@ -27,6 +27,20 @@ from qgfusion.utils.losses import (
     occupancy_loss, completion_loss, detection_loss,
     gt_boxes_to_targets, make_completion_gt,
 )
+
+# Occ3D class frequencies (approx): free(17) ~86%, occupied classes ~14% combined
+# Upweight occupied classes by ~6x to counter free-space dominance
+OCC_CLASS_WEIGHTS = None  # built at first use
+
+def get_occ_weights(device):
+    global OCC_CLASS_WEIGHTS
+    if OCC_CLASS_WEIGHTS is None:
+        import torch
+        # Weight = 1/freq, normalized. Free class(17) weight=1, occupied=6
+        w = torch.ones(18, device=device)
+        w[:17] = 6.0  # all occupied classes upweighted
+        OCC_CLASS_WEIGHTS = w
+    return OCC_CLASS_WEIGHTS
 from qgfusion.utils.matcher import HungarianMatcher
 
 LOSS_WEIGHTS = {"occ": 1.0, "det_cls": 0.5, "det_box": 0.05, "completion": 0.25}
@@ -108,7 +122,8 @@ def gaussian_health_check(out, step, logger):
 def compute_losses(out, batch, matcher, device):
     losses = {}
     if batch["gt_occupancy"] is not None:
-        losses["occ"] = occupancy_loss(out["occupancy_logits"], batch["gt_occupancy"])
+        losses["occ"] = occupancy_loss(out["occupancy_logits"], batch["gt_occupancy"],
+                                            weight=get_occ_weights(out["occupancy_logits"].device))
         comp_gt = make_completion_gt(batch["gt_occupancy"])
         losses["completion"] = completion_loss(out["completion_logits"], comp_gt)
     pc_range = [-40.0, -40.0, -1.0, 40.0, 40.0, 5.4]

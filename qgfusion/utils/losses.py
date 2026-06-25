@@ -8,14 +8,16 @@ import torch
 import torch.nn.functional as F
 
 
-def occupancy_loss(logits, gt, ignore_index: int = -1):
+def occupancy_loss(logits, gt, ignore_index: int = -1, weight=None):
     """Voxel-wise cross-entropy.
-    logits: (B, C, X, Y, Z),  gt: (B, X, Y, Z) int64"""
+    logits: (B, C, X, Y, Z),  gt: (B, X, Y, Z) int64
+    weight: (C,) optional per-class weights to handle class imbalance"""
     B, C = logits.shape[:2]
     return F.cross_entropy(
         logits.reshape(B, C, -1),
         gt.reshape(B, -1).long(),
         ignore_index=ignore_index,
+        weight=weight,
     )
 
 

@@ -74,7 +74,8 @@ def init_logger(cfg, enabled, run_name="overfit"):
 def compute_losses(out, batch, matcher, device):
     losses = {}
     if batch["gt_occupancy"] is not None:
-        losses["occ"] = occupancy_loss(out["occupancy_logits"], batch["gt_occupancy"])
+        w = torch.ones(18, device=out["occupancy_logits"].device); w[:17] = 6.0
+        losses["occ"] = occupancy_loss(out["occupancy_logits"], batch["gt_occupancy"], weight=w)
         comp_gt = make_completion_gt(batch["gt_occupancy"])
         losses["completion"] = completion_loss(out["completion_logits"], comp_gt)
     # Filter GT boxes to pc_range so out-of-range annotations don't inflate det_box loss
