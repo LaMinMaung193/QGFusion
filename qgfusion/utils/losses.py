@@ -8,17 +8,41 @@ import torch
 import torch.nn.functional as F
 
 
-def occupancy_loss(logits, gt, ignore_index: int = -1, weight=None):
-    """Voxel-wise cross-entropy.
+def occupancy_loss(logits, gt, ignore_index: int = -1, weight=None, gamma: float = 2.0):
+    """Voxel-wise focal loss for occupancy prediction.
+    Focal loss down-weights easy examples (free space) and focuses on hard ones (occupied).
+    gamma=0 reduces to standard cross-entropy. gamma=2 is the standard focal loss setting.
     logits: (B, C, X, Y, Z),  gt: (B, X, Y, Z) int64
-    weight: (C,) optional per-class weights to handle class imbalance"""
+    weight: (C,) optional per-class weights
+    gamma: focal loss exponent (2.0 recommended)
+    """
+    import torch
     B, C = logits.shape[:2]
-    return F.cross_entropy(
-        logits.reshape(B, C, -1),
-        gt.reshape(B, -1).long(),
-        ignore_index=ignore_index,
-        weight=weight,
-    )
+    logits_2d = logits.reshape(B, C, -1)     # (B, C, N)
+    gt_1d = gt.reshape(B, -1).long()          # (B, N)
+
+    # Standard CE loss per voxel (unreduced)
+    ce = F.cross_entropy(logits_2d, gt_1d, weight=weight,
+                         ignore_index=ignore_index, reduction='none')  # (B, N)
+
+    # Focal weight: (1 - p_t)^gamma
+    with torch.no_grad():
+        probs = F.softmax(logits_2d, dim=1)   # (B, C, N)
+        gt_clamped = gt_1d.clone()
+        gt_clamped[gt_clamped == ignore_index] = 0
+        pt = probs.gather(1, gt_clamped.unsqueeze(1)).squeeze(1)  # (B, N)
+        focal_weight = (1.0 - pt) ** gamma
+
+    # Zero out ignored positions
+    if ignore_index >= 0:
+        mask = (gt_1d != ignore_index).float()
+        focal_weight = focal_weight * mask
+        ce = ce * mask
+        n_valid = mask.sum().clamp(min=1)
+    else:
+        n_valid = torch.tensor(gt_1d.numel(), dtype=torch.float)
+
+    return (focal_weight * ce).sum() / n_valid
 
 
 def completion_loss(logits, gt, ignore_index: int = -1):

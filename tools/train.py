@@ -38,7 +38,7 @@ def get_occ_weights(device):
         import torch
         # Weight = 1/freq, normalized. Free class(17) weight=1, occupied=6
         w = torch.ones(18, device=device)
-        w[:17] = 6.0  # all occupied classes upweighted
+        w[:17] = 3.0  # all occupied classes upweighted
         OCC_CLASS_WEIGHTS = w
     return OCC_CLASS_WEIGHTS
 from qgfusion.utils.matcher import HungarianMatcher
