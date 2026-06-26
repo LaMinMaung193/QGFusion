@@ -391,3 +391,44 @@
 - 6x class weight insufficient at mini scale (~284 GT samples only)
 - Trainval expected to show non-zero occupied IoU — that is the paper result
 - Mini = proof of concept only
+
+---
+
+## 15. Architecture Note — OccupancyHead Rasterization Fix (Paper-worthy)
+
+### What we found
+Original implementation used isotropic mean-sigma splatting:
+    sigma = scale.mean(-1)  # scalar per Gaussian
+    weight = opacity * exp(-0.5 * dist^2 / sigma^2)
+
+This caused every voxel to receive contributions from all 300 Gaussians
+(each covering ~1700 voxels at scale_mean=2.6m). Result: uniform feature
+vectors everywhere → model always predicted free (class 17), pred_count=0
+for all occupied classes even after 14 epochs on 14,749 samples.
+
+### The fix
+Anisotropic splatting with distance cutoff and weight normalization:
+    mahal2 = (dx/sx)^2 + (dy/sy)^2 + (dz/sz)^2   # per-axis
+    mask = (mahal2 <= 3.0^2)                         # 3-sigma cutoff
+    weight = opacity * exp(-0.5 * mahal2) * mask
+    weight = weight / weight.sum()                   # normalize
+
+Smoke test with random weights:
+  Before fix: pred classes = [17] (always free)
+  After fix:  pred classes = [6, 9] (pedestrian, truck — spatially varied)
+
+### Paper framing
+Frame as a design contribution in Section 4 (Method):
+"Unlike prior works that use isotropic Gaussian splatting [cite], we use
+anisotropic axis-aligned Gaussians with a Mahalanobis distance cutoff,
+which prevents distant Gaussians from uniformly blurring voxel features
+and enables spatially localized occupancy predictions."
+
+This is directly relevant to the paper's core claim: Gaussian representation
+as an effective intermediate for occupancy. The anisotropic formulation is
+what makes the Gaussians actually useful for this task.
+
+### Evidence to report in paper
+- Ablation: isotropic vs anisotropic splatting (pred_count=0 vs non-zero IoU)
+- This becomes Ablation F in the ablation study table
+- Add to Section 11 (Design Decisions) as decision #14
