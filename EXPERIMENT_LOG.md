@@ -287,6 +287,17 @@
 | 4 | train.py | Opacity collapse in full training | Opacity regulariser missing from train.py - added |
 | 4 | train.py | Val total=0.0000 despite nonzero losses | Compute total from weighted sum in run_val |
 
+
+| Phase | File | Bug | Fix |
+|-------|------|-----|-----|
+| 5 | occupancy_head.py | Isotropic mean-sigma splatting: scale.mean(-1) caused all 300 Gaussians to influence every voxel, producing uniform features → pred_count=0 for all occupied classes at epoch 14 | Anisotropic Mahalanobis splatting: (dx/sx)^2+(dy/sy)^2+(dz/sz)^2 with 3-sigma cutoff and weight normalization |
+| 5 | train.py | OCC_CLASS_WEIGHTS=6x too aggressive: val occ worsened epochs 0->5 (0.433->0.525), det_cls exploded to 11.1 | Reduced to 3x |
+| 5 | losses.py | Focal loss (gamma=2) reduced loss value but did not fix zero pred_count — masked structural problem | Reverted to weighted CE after head fix |
+| 5 | evaluate.py | --max-samples counted total samples not GT samples | Fixed to count n_with_gt |
+| 5 | evaluate.py | GT path assumed flat {token}.npz but actual layout is scene-XXXX/{token}.npz | Built index cache: build_occ3d_index() |
+| 5 | train.py | Val loader not using blacklist → crash during val loop at epoch 0 | Added blacklist=args.blacklist to val_set constructor |
+| 5 | DataLoader workers | Killed worker PIDs instead of main training process | Use kill $(pgrep -f "train.py") |
+
 ---
 
 ## 12. Design Decisions
@@ -306,6 +317,46 @@
 | 11 | QPN positional encoding | Dropped | Deferred; TODO | After Phase 5 |
 | 12 | Opacity regulariser | relu(0.3-mean_opacity) x 2.0 | Prevents occ head zeroing opacities | No |
 | 13 | Scale regulariser | relu(mean_scale-5.0) x 0.1 | Prevents scale ceiling saturation | No |
+
+### New decisions 
+ 
+| # | Decision | Choice | Rationale | Revisit? |
+|---|----------|--------|-----------|----------|
+| 14 | Occupancy splatting | Anisotropic Mahalanobis + 3-sigma cutoff + weight norm | Isotropic caused uniform voxel features; pred_count=0 | No |
+| 15 | Class weight for occ loss | 3x (reduced from 6x) | 6x caused val occ to worsen; 3x with fixed head | After Phase 5 full eval |
+| 16 | Focal loss | Reverted to weighted CE | Focal reduced loss value but masked structural rasterization bug | No |
+| 17 | OCC3D GT path | Scene subdirectory layout + pre-built index | Flat path assumed wrong; index avoids repeated 850-dir scan | No |
+ 
+### Trainval training history (broken head, for record):
+ 
+| Epoch | Val occ | Val completion | Notes |
+|-------|---------|---------------|-------|
+| 0 | 0.433 | 0.103 | CE + 6x weight |
+| 1 | 0.498 | 0.118 | Worsening |
+| 2 | 0.494 | 0.113 | |
+| 3 | 0.503 | 0.116 | |
+| 4 | 0.526 | 0.119 | |
+| 5 | 0.525 | 0.120 | |
+| 6 | 0.212 | 0.113 | Focal loss introduced |
+| 7 | 0.214 | 0.117 | Plateaued |
+| 8 | 0.223 | 0.124 | |
+| 14 | 0.228 | 0.125 | Still pred_count=0 all occupied |
+All epochs above: pred_count=0 for all occupied classes (broken isotropic head)
+ 
+### Mini training history (fixed head):
+ 
+| Epoch | Val occ | Val completion |
+|-------|---------|---------------|
+| 0 | 1.319 | 0.475 |
+| 1 | 1.132 | 0.364 |
+| 13 | 0.453 | 0.160 |
+| 23 | 0.474 | 0.168 |
+Still pred_count=0 — mini too small (41 GT val samples) for occupied learning
+ 
+### Evaluation speed improvement from head fix:
+- Broken head: 3607ms/sample (all 300 Gaussians contributing to every voxel)
+- Fixed head: 279ms/sample (distance cutoff limits contributions)
+- 13x speedup — confirms distance cutoff is working
 
 ---
 
