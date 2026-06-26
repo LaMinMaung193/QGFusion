@@ -38,7 +38,7 @@ class QueryToGaussianGenerator(nn.Module):
             GaussianScene with N Gaussians per batch element.
         """
         position = self.pos_head(Qf)
-        scale = torch.exp(self.scale_head(Qf).clamp(min=-2, max=3))
+        scale = torch.exp(self.scale_head(Qf).clamp(min=-1, max=2))
         rotation = nn.functional.normalize(self.rot_head(Qf), dim=-1)
         opacity = torch.sigmoid(self.opacity_head(Qf)).squeeze(-1) * 0.9 + 0.05
         features = self.feature_head(Qf)

@@ -66,9 +66,12 @@ class OccupancyHead(nn.Module):
             cutoff = self.max_sigma_mult ** 2
             mask = (mahal2 <= cutoff).float()
             weight = opacity_b * torch.exp(-0.5 * mahal2) * mask  # (Vc, N)
-            # Normalize weights so every voxel sums to 1 (prevents uniform blurring)
-            weight_sum = weight.sum(-1, keepdim=True).clamp(min=1e-6)
-            weight = weight / weight_sum
+            # Softmax over Gaussians so weights sum to 1 even with cutoff
+            # Use softmax instead of normalize: handles zero-weight case gracefully
+            # Add small epsilon before softmax so voxels with no coverage get
+            # uniform average of all Gaussian features (not garbage from near-zero div)
+            weight = weight + 1e-6  # ensure no voxel is fully zero
+            weight = weight / weight.sum(-1, keepdim=True)
             return weight @ feats_b  # (Vc, C)
 
         B, N, _ = gaussians.position.shape
