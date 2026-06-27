@@ -66,12 +66,10 @@ class OccupancyHead(nn.Module):
             cutoff = self.max_sigma_mult ** 2
             mask = (mahal2 <= cutoff).float()
             weight = opacity_b * torch.exp(-0.5 * mahal2) * mask  # (Vc, N)
-            # Softmax over Gaussians so weights sum to 1 even with cutoff
-            # Use softmax instead of normalize: handles zero-weight case gracefully
-            # Add small epsilon before softmax so voxels with no coverage get
-            # uniform average of all Gaussian features (not garbage from near-zero div)
-            weight = weight + 1e-6  # ensure no voxel is fully zero
-            weight = weight / weight.sum(-1, keepdim=True)
+            # No normalization — raw weighted sum
+            # Voxels near Gaussians get strong signal; far voxels get ~0
+            # This preserves spatial information: classifier sees different
+            # features per voxel based on which Gaussians are nearby
             return weight @ feats_b  # (Vc, C)
 
         B, N, _ = gaussians.position.shape
