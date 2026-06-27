@@ -56,7 +56,11 @@ class QueryToGaussianGenerator(nn.Module):
         scale = torch.tensor([40.0, 40.0, 3.2], device=Qf.device)
         refs = refs * scale  # (1, N, 3)
         position = refs.expand(B, -1, -1) + self.pos_head(Qf) * 5.0
-        scale = torch.exp(self.scale_head(Qf).clamp(min=-1, max=2))
+        # Clamp to pc_range to keep Gaussians inside the scene
+        pc_min = torch.tensor([-40.0, -40.0, -1.0], device=Qf.device)
+        pc_max = torch.tensor([ 40.0,  40.0,  5.4], device=Qf.device)
+        position = torch.clamp(position, pc_min, pc_max)
+        scale = torch.exp(self.scale_head(Qf).clamp(min=-0.5, max=2))
         rotation = nn.functional.normalize(self.rot_head(Qf), dim=-1)
         opacity = torch.sigmoid(self.opacity_head(Qf)).squeeze(-1) * 0.9 + 0.05
         features = self.feature_head(Qf)

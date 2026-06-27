@@ -152,8 +152,9 @@ def compute_losses(out, batch, matcher, device):
         opacity_reg = torch.relu(0.3 - mean_opacity) * 2.0
         total = total + opacity_reg
         mean_scale = out["gaussians"].scale.mean()
-        scale_reg = torch.relu(mean_scale - 5.0) * 0.1
-        total = total + scale_reg
+        scale_reg = torch.relu(mean_scale - 5.0) * 0.1  # penalise explosion
+        scale_floor_reg = torch.relu(1.0 - mean_scale) * 0.5  # penalise collapse to floor
+        total = total + scale_reg + scale_floor_reg
     # Guard: if no loss terms fired (e.g. all boxes filtered), return a differentiable zero
     if not isinstance(total, torch.Tensor) or total.grad_fn is None:
         total = sum(p.sum() * 0 for p in out["occupancy_logits"].flatten()[:1])
