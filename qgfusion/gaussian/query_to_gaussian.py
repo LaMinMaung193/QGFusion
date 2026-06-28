@@ -46,21 +46,29 @@ class QueryToGaussianGenerator(nn.Module):
         B, N, _ = Qf.shape
         # Create N evenly-spaced reference points in BEV
         idx = torch.arange(N, device=Qf.device).float()
-        # Distribute queries across X-Y plane in a grid pattern
-        grid_w = int(N ** 0.5) + 1
-        ref_x = ((idx % grid_w) / grid_w - 0.5) * 2   # [-1, 1]
-        ref_y = ((idx // grid_w) / grid_w - 0.5) * 2  # [-1, 1]
-        ref_z = torch.zeros_like(ref_x)
+        # Distribute queries in 3D: X-Y grid + Z levels
+        n_z = 4  # number of height levels
+        n_xy = N // n_z
+        grid_w = int(n_xy ** 0.5) + 1
+        idx_xy = idx % n_xy
+        idx_z  = (idx // n_xy).clamp(max=n_z - 1)
+        ref_x = ((idx_xy % grid_w) / grid_w - 0.5) * 2
+        ref_y = ((idx_xy // grid_w) / grid_w - 0.5) * 2
+        ref_z = (idx_z / (n_z - 1) - 0.5) * 2  # [-1, 1] across Z levels
         refs = torch.stack([ref_x, ref_y, ref_z], dim=-1).unsqueeze(0)  # (1, N, 3)
-        # Scale to pc_range: X in [-40,40], Y in [-40,40], Z in [-1,5.4]
-        scale = torch.tensor([40.0, 40.0, 3.2], device=Qf.device)
-        refs = refs * scale  # (1, N, 3)
+        # Scale to pc_range
+        scale_xyz = torch.tensor([40.0, 40.0, 3.2], device=Qf.device)
+        refs = refs * scale_xyz  # (1, N, 3)
         position = refs.expand(B, -1, -1) + self.pos_head(Qf) * 5.0
         # Clamp to pc_range to keep Gaussians inside the scene
         pc_min = torch.tensor([-40.0, -40.0, -1.0], device=Qf.device)
         pc_max = torch.tensor([ 40.0,  40.0,  5.4], device=Qf.device)
         position = torch.clamp(position, pc_min, pc_max)
-        scale = torch.exp(self.scale_head(Qf).clamp(min=-0.5, max=2))
+        # Softplus ensures scale > 0 without hard clamp saturation
+        # beta=1, threshold=20: smooth for small values, linear for large
+        scale_raw = self.scale_head(Qf)  # (B, N, 3)
+        scale = torch.nn.functional.softplus(scale_raw, beta=2.0) + 0.5
+        scale = scale.clamp(max=5.0)  # max 5m per axis
         rotation = nn.functional.normalize(self.rot_head(Qf), dim=-1)
         opacity = torch.sigmoid(self.opacity_head(Qf)).squeeze(-1) * 0.9 + 0.05
         features = self.feature_head(Qf)
