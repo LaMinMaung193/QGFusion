@@ -59,8 +59,12 @@ class QueryToGaussianGenerator(nn.Module):
         # Scale to pc_range
         scale_xyz = torch.tensor([40.0, 40.0, 3.2], device=Qf.device)
         refs = refs * scale_xyz  # (1, N, 3)
-        position = refs.expand(B, -1, -1) + self.pos_head(Qf) * 5.0
-        # Clamp to pc_range to keep Gaussians inside the scene
+        # MLP residual only affects X and Y; Z is hard-assigned from reference
+        # This prevents the MLP from cancelling Z variation
+        pos_residual = self.pos_head(Qf) * 5.0  # (B, N, 3)
+        pos_xy = refs[..., :2].expand(B, -1, -1) + pos_residual[..., :2]
+        pos_z  = refs[..., 2:3].expand(B, -1, -1)  # hard Z — no MLP override
+        position = torch.cat([pos_xy, pos_z], dim=-1)
         pc_min = torch.tensor([-40.0, -40.0, -1.0], device=Qf.device)
         pc_max = torch.tensor([ 40.0,  40.0,  5.4], device=Qf.device)
         position = torch.clamp(position, pc_min, pc_max)

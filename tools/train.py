@@ -221,6 +221,14 @@ def main():
                                   weight_decay=cfg["train"]["weight_decay"])
     matcher   = HungarianMatcher(cost_class=1.0, cost_bbox=2.5)
 
+    # Warmup: freeze position head for first 3 epochs so reference grid stabilizes
+    # before the MLP can learn to cancel it
+    WARMUP_EPOCHS = 3
+    def set_pos_head_grad(requires_grad: bool):
+        for p in model.gaussian_gen.pos_head.parameters():
+            p.requires_grad_(requires_grad)
+        print(f"  [warmup] pos_head grad={'ON' if requires_grad else 'OFF'}")
+
     start_epoch, global_step = 0, 0
     if args.resume:
         start_epoch, global_step = load_checkpoint(args.resume, model, optimizer)
@@ -266,7 +274,12 @@ def main():
     except Exception as e:
         print(f"[val] Could not build val loader ({e}) -- skipping")
 
+    set_pos_head_grad(False)  # start frozen
+
     for epoch in range(start_epoch, cfg["train"]["epochs"]):
+        # Unfreeze position head after warmup
+        if epoch == WARMUP_EPOCHS:
+            set_pos_head_grad(True)
         model.train()
         epoch_loss = 0.0
         t0 = time.time()
