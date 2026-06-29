@@ -51,7 +51,7 @@ class DirectOccHead(nn.Module):
         self.classifier   = nn.Sequential(
             nn.Linear(128, 128), nn.ReLU(), nn.Linear(128, num_classes))
 
-        self.sigma = 3.0  # fixed Gaussian sigma in meters
+        self.sigma = 1.0  # 1m sigma: tight enough to differentiate voxels
 
     def _voxel_centers(self, device):
         X, Y, Z = self.grid_size
