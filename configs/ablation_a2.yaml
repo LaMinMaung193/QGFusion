@@ -1,0 +1,50 @@
+model:
+  embed_dim: 256
+  num_queries: 300         # per proposal Sec 6: keep queries <= 300-500
+
+  camera_channels: 256
+  camera_pretrained: imagenet   # imagenet | nuimages (nuimages ckpt not wired up yet, see camera_encoder.py)
+
+  lidar_channels: 256
+  lidar_backend: spconv          # dense | spconv (both implemented -- spconv requires `pip install spconv-cuXXX` + GPU)
+
+  radar_channels: 128
+
+  gaussian_feature_dim: 128
+  predict_velocity: false       # proposal Sec 4.4: "optional velocity, recommended for future work"
+
+  fusion_layers: 4
+
+  pc_range: [-40.0, -40.0, -1.0, 40.0, 40.0, 5.4]
+  occ_voxel_size: [0.4, 0.4, 0.4]
+  occ_num_classes: 18           # adjust to your occupancy benchmark's class count (e.g. Occ3D-nuScenes)
+  det_num_classes: 10           # nuScenes detection classes
+
+dataset:
+  dataroot: /media/user/Transcend/data123/v1.0-trainval-unified
+  version: v1.0-trainval
+  occ_gt_root: /media/user/Transcend/data/occ3d/gts
+  num_cameras: 6
+  img_size: [256, 704]
+
+
+train:
+  split: train
+  batch_size: 1
+  num_workers: 4
+  lr: 2.0e-4
+  weight_decay: 0.01
+  epochs: 24
+  grad_clip: 35.0
+
+
+val:
+  split: val
+  val_every: 1
+
+wandb:
+  project: qgfusion
+  name: null
+  enabled: true
+
+ablation: direct_occ

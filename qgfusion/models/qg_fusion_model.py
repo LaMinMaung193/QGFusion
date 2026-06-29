@@ -43,6 +43,19 @@ class QGFusionModel(nn.Module):
             predict_velocity=m.get("predict_velocity", False),
         )
 
+        ablation = cfg.get("ablation", None)
+        self.ablation = ablation
+
+        if ablation == "direct_occ":
+            from qgfusion.heads.direct_occ_head import DirectOccHead
+            self.direct_occ_head = DirectOccHead(
+                embed_dim=embed_dim,
+                num_classes=m["occ_num_classes"],
+                voxel_size=m["occ_voxel_size"],
+                pc_range=m["pc_range"],
+                num_queries=num_queries,
+            )
+
         self.occ_head = OccupancyHead(
             feature_dim=m["gaussian_feature_dim"],
             num_classes=m["occ_num_classes"],
@@ -85,7 +98,10 @@ class QGFusionModel(nn.Module):
         Qf = self.fusion(Qc, Ql, Qr)
         gaussians = self.gaussian_gen(Qf)
 
-        occupancy_logits = self.occ_head(gaussians)
+        if self.ablation == "direct_occ":
+            occupancy_logits = self.direct_occ_head(Qf)
+        else:
+            occupancy_logits = self.occ_head(gaussians)
         detection = self.det_head(gaussians)
         completion_logits = self.completion_head(gaussians)
 
