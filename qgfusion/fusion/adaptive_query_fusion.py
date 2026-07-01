@@ -24,7 +24,8 @@ class AdaptiveQueryFusion(nn.Module):
             self.modality_tokens = nn.Parameter(torch.randn(3, embed_dim) * 0.02)
 
         layer = nn.TransformerEncoderLayer(
-            d_model=embed_dim, nhead=num_heads, dim_feedforward=embed_dim * 4, batch_first=True
+            d_model=embed_dim, nhead=num_heads, dim_feedforward=embed_dim * 4,
+            batch_first=True, norm_first=True  # Pre-LN: more stable, prevents LayerNorm collapse
         )
         self.transformer = nn.TransformerEncoder(layer, num_layers=num_layers)
 
