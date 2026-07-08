@@ -70,24 +70,27 @@ def init_logger(cfg, enabled):
         return _NoopLogger()
 
 
-def save_checkpoint(model, optimizer, epoch, step, loss, cfg, ckpt_dir):
+def save_checkpoint(model, optimizer, scheduler, epoch, step, loss, cfg, ckpt_dir):
     os.makedirs(ckpt_dir, exist_ok=True)
     path = os.path.join(ckpt_dir, f"epoch_{epoch:03d}_step_{step}.pt")
     torch.save({
         "epoch": epoch, "step": step,
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict(),
         "loss": loss, "cfg": cfg,
     }, path)
     print(f"  [ckpt] saved → {path}")
     return path
 
 
-def load_checkpoint(path, model, optimizer=None):
+def load_checkpoint(path, model, optimizer=None, scheduler=None):
     ckpt = torch.load(path, map_location="cpu")
     model.load_state_dict(ckpt["model_state_dict"])
     if optimizer is not None and "optimizer_state_dict" in ckpt:
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+    if scheduler is not None and "scheduler_state_dict" in ckpt:
+        scheduler.load_state_dict(ckpt["scheduler_state_dict"])
     print(f"  [ckpt] resumed from {path}  (epoch {ckpt['epoch']}, step {ckpt['step']})")
     return ckpt["epoch"], ckpt["step"]
 
@@ -219,6 +222,8 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(),
                                   lr=cfg["train"]["lr"],
                                   weight_decay=cfg["train"]["weight_decay"])
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=cfg["train"]["epochs"], eta_min=cfg["train"]["lr"] * 0.01)
     matcher   = HungarianMatcher(cost_class=1.0, cost_bbox=2.5)
 
     # Warmup: freeze position head for first 3 epochs so reference grid stabilizes
@@ -231,7 +236,7 @@ def main():
 
     start_epoch, global_step = 0, 0
     if args.resume:
-        start_epoch, global_step = load_checkpoint(args.resume, model, optimizer)
+        start_epoch, global_step = load_checkpoint(args.resume, model, optimizer, scheduler)
         start_epoch += 1
 
     train_set = NuScenesMultiModalDataset(
@@ -315,6 +320,9 @@ def main():
         print(f"epoch {epoch:03d} | mean={mean_loss:.4f} | "
               f"{elapsed:.0f}s ({elapsed/len(train_loader)*1000:.0f}ms/step)")
         logger.log({"train/epoch_mean_loss": mean_loss}, step=global_step)
+
+        scheduler.step()
+        print(f'  [lr] epoch {epoch:03d} -> {optimizer.param_groups[0]["lr"]:.2e}')
 
         if val_loader is not None and (epoch + 1) % val_every == 0:
             run_val(model, val_loader, matcher, device, epoch, global_step, logger)
