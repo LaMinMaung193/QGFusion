@@ -328,7 +328,7 @@ def main():
             run_val(model, val_loader, matcher, device, epoch, global_step, logger)
 
         if (epoch + 1) % args.ckpt_every == 0:
-            save_checkpoint(model, optimizer, epoch, global_step,
+            save_checkpoint(model, optimizer, scheduler, epoch, global_step,
                             mean_loss, cfg, args.ckpt_dir)
 
     logger.finish()
